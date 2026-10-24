@@ -1,0 +1,14 @@
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jag binary
+*.mem binary
+*.dll binary
+*.wav binary
+*.ogg binary
+*.mid binary
+*.ttf binary
+*.ico binary
+*.data binary
+*.wasm binary
+*.zip binary
