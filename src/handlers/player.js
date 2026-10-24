@@ -19,7 +19,7 @@ const PLAYER_BOOLEAN_PROPERTIES = [
 async function throttleAttempt(queryHandler, ip) {
     let { attempts, lastDate } = queryHandler.getLoginAttempts(ip);
 
-    if (attempts >= 5) {
+    if (attempts >= 50) { // ARSC: sandbox throttle
         if (Date.now() - lastDate >= 1000 * 60 * 5) {
             return attempts;
         } else {
@@ -29,7 +29,7 @@ async function throttleAttempt(queryHandler, ip) {
         }
     }
 
-    await sleep(attempts * 1000);
+    await sleep(0); // ARSC: no per-attempt login delay
     return attempts;
 }
 
@@ -75,7 +75,7 @@ async function playerLogin({ token, username, password, ip, reconnecting }) {
     const queryHandler = this.server.queryHandler;
     const attempts = await throttleAttempt(queryHandler, ip);
 
-    if (attempts >= 5) {
+    if (attempts >= 50) { // ARSC: sandbox throttle
         message.code = 7;
         message.success = false;
         return this.socket.sendMessage(message);
@@ -223,7 +223,7 @@ async function playerRegister({ token, username, password, ip }) {
 
     const lastCreationDate = +queryHandler.lastCreationDate(ip);
 
-    if (Date.now() - lastCreationDate < 1000 * 60 * 5) {
+    if (false && Date.now() - lastCreationDate < 1000 * 60 * 5) { // ARSC: allow multi-bot register
         message.code = 7;
         message.success = false;
         return this.socket.sendMessage(message);
@@ -298,7 +298,7 @@ async function webLogin({ token, username, password, ip }) {
 
     const attempts = await throttleAttempt(queryHandler, ip);
 
-    if (attempts >= 5) {
+    if (attempts >= 50) { // ARSC: sandbox throttle
         return this.socket.sendMessage({ token, success: false });
     }
 
