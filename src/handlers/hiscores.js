@@ -1,3 +1,4 @@
+const { normalizeUsername } = require('../username');
 const skills = new Set(require('../skills.json'));
 skills.add('overall');
 
@@ -20,7 +21,7 @@ async function getHiscoreRanks({
 }
 
 async function getPlayerRanks({ token, username }) {
-    username = username.toLowerCase();
+    username = normalizeUsername(username);
 
     const queryHandler = this.server.queryHandler;
     const ranks = queryHandler.getPlayerRanks(username) || null;

@@ -5,6 +5,7 @@ const fs = require('fs');
 const net = require('net');
 
 const log = require('bole')('server');
+const { normalizeUsername } = require('./username');
 
 // 3 hours
 const HISCORE_FREQUENCY = 1000 * 60 * 60 * 3;
@@ -76,6 +77,8 @@ class Server {
     }
 
     getPlayerWorld(username) {
+        username = normalizeUsername(username);
+
         for (const id of Object.keys(this.worlds)) {
             const world = this.worlds[id];
 

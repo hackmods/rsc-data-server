@@ -7,6 +7,7 @@
     "rsc-data-server": "./src/bin.js"
   },
   "scripts": {
+    "test": "node --test test/*.test.js",
     "start": "./src/bin.js -v debug | garnish"
   },
   "author": "2003Scape Team",

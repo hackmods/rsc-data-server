@@ -3,6 +3,8 @@ const log = require('bole')('player');
 const promisify = require('util').promisify;
 const sleep = require('sleep-promise');
 
+const { normalizeUsername } = require('../username');
+
 const bcryptCompare = promisify(bcrypt.compare);
 const bcryptHash = promisify(bcrypt.hash);
 
@@ -70,7 +72,7 @@ async function playerLogin({ token, username, password, ip, reconnecting }) {
         return this.socket.sendMessage(message);
     }
 
-    username = username.toLowerCase();
+    username = normalizeUsername(username);
 
     const queryHandler = this.server.queryHandler;
     const attempts = await throttleAttempt(queryHandler, ip);
@@ -181,7 +183,7 @@ async function playerLogin({ token, username, password, ip, reconnecting }) {
 }
 
 async function playerLogout({ token, username }) {
-    username = username.toLowerCase();
+    username = normalizeUsername(username);
 
     this.server.totalPlayers -= 1;
     this.world.players.delete(username);
@@ -229,7 +231,7 @@ async function playerRegister({ token, username, password, ip }) {
         return this.socket.sendMessage(message);
     }
 
-    username = username.replace('_', '').trim().toLowerCase();
+    username = normalizeUsername(username);
 
     if (queryHandler.usernameExists(username)) {
         message.code = 3;
@@ -292,7 +294,7 @@ async function playerMessage({ token, toUsername, fromUsername, message }) {
 }
 
 async function webLogin({ token, username, password, ip }) {
-    username = username.trim().toLowerCase();
+    username = normalizeUsername(username);
 
     const queryHandler = this.server.queryHandler;
 
