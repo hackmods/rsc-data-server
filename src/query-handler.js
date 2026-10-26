@@ -4,6 +4,7 @@ const skills = require('./skills.json');
 const snakeCaseKeys = require('snakecase-keys');
 const stripHTML = require('string-strip-html');
 const { experienceToLevel } = require('./skills');
+const { EXCHANGE_STATEMENTS, ExchangeStore } = require('./exchange/store');
 
 const CREATE_TABLES = fs
     .readFileSync(`${__dirname}/../create-tables.sql`)
@@ -183,12 +184,16 @@ class QueryHandler {
                 'INSERT INTO `player_messages` ' +
                 '(`to_player`, `from`, `subject`, `message`) ' +
                 'SELECT `id`, :from, :subject, :message ' +
-                'FROM `players` WHERE `username` = :username'
+                'FROM `players` WHERE `username` = :username',
+            ...EXCHANGE_STATEMENTS
         };
 
         for (const [name, statement] of Object.entries(this.statements)) {
             this.statements[name] = this.database.prepare(statement);
         }
+
+        // Grand Exchange order book (src/exchange/store.js)
+        this.exchange = new ExchangeStore(this);
 
         this.updateTotalHiscoreRanks = this.database.transaction(() => {
             this.statements.dropRankTable.run();

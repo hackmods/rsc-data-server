@@ -152,3 +152,97 @@ CREATE TABLE IF NOT EXISTS `uploads` (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS `name_unique` on `uploads` (`name`);
+
+-- Grand Exchange (ARSC): docs/GRAND_EXCHANGE.md in hackmods/Autonomous-RSC.
+-- Times are epoch milliseconds. Coins are item id 10.
+
+CREATE TABLE IF NOT EXISTS `exchange_offers` (
+    `id` integer not null primary key,
+    `player_id` integer not null,
+    `username` varchar(12),
+    `slot` integer not null, -- 0-7: the lowest slot no open offer of that player holds
+    `side` text not null check (`side` in ('buy', 'sell')),
+    `item_id` integer not null,
+    `qty` integer not null,
+    `filled` integer not null default 0,
+    `price` integer not null,
+    `coins_moved` integer not null default 0, -- coins paid (buy) or gross proceeds (sell) so far
+    `state` text not null default 'open'
+        check (`state` in ('open', 'done', 'cancelled')),
+    `created` integer not null,
+    `updated` integer not null
+);
+
+CREATE INDEX IF NOT EXISTS `exchange_offers_book` ON `exchange_offers`
+(`item_id`, `side`, `state`, `price`, `created`);
+
+CREATE INDEX IF NOT EXISTS `exchange_offers_player` ON `exchange_offers`
+(`player_id`, `state`);
+
+-- one open offer per slot per player
+CREATE UNIQUE INDEX IF NOT EXISTS `exchange_offers_open_slot` ON
+`exchange_offers` (`player_id`, `slot`) WHERE `state` = 'open';
+
+CREATE TABLE IF NOT EXISTS `exchange_fills` (
+    `id` integer not null primary key,
+    `buy_id` integer not null,
+    `sell_id` integer not null,
+    `item_id` integer not null,
+    `qty` integer not null,
+    `price` integer not null,
+    `tax` integer not null default 0,
+    `at` integer not null
+);
+
+CREATE INDEX IF NOT EXISTS `exchange_fills_item_at` ON `exchange_fills`
+(`item_id`, `at`);
+
+-- the collection box: claimed_at is null until the player collects the row
+CREATE TABLE IF NOT EXISTS `exchange_collect` (
+    `id` integer not null primary key,
+    `player_id` integer not null,
+    `item_id` integer not null,
+    `amount` integer not null,
+    `reason` text, -- bought|sold|refund|cancel|stake
+    `offer_id` integer,
+    `created` integer not null,
+    `claimed_at` integer
+);
+
+CREATE INDEX IF NOT EXISTS `exchange_collect_player` ON `exchange_collect`
+(`player_id`, `claimed_at`);
+
+CREATE TABLE IF NOT EXISTS `exchange_limits` (
+    `player_id` integer not null,
+    `item_id` integer not null,
+    `window_start` integer not null,
+    `bought` integer not null default 0,
+    primary key (`player_id`, `item_id`)
+);
+
+-- per-item buy limit overrides (default 1000, stackable 25000)
+CREATE TABLE IF NOT EXISTS `exchange_limit_overrides` (
+    `item_id` integer not null primary key,
+    `buy_limit` integer not null
+);
+
+-- idempotency: every write reply by opId
+CREATE TABLE IF NOT EXISTS `exchange_ops` (
+    `op_id` text not null primary key,
+    `player_id` integer,
+    `kind` text,
+    `result` text,
+    `at` integer
+);
+
+CREATE TABLE IF NOT EXISTS `economy_ledger` (
+    `id` integer not null primary key,
+    `at` integer not null,
+    `kind` text not null, -- tax|stake|refund|taint_trade
+    `player_id` integer,
+    `item_id` integer,
+    `amount` integer,
+    `note` text
+);
+
+CREATE INDEX IF NOT EXISTS `economy_ledger_at` ON `economy_ledger` (`at`);

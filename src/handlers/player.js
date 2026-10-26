@@ -4,19 +4,11 @@ const promisify = require('util').promisify;
 const sleep = require('sleep-promise');
 
 const { normalizeUsername } = require('../username');
+const { savePlayer } = require('../player-save');
 
 const bcryptCompare = promisify(bcrypt.compare);
 const bcryptHash = promisify(bcrypt.hash);
 
-const PLAYER_BOOLEAN_PROPERTIES = [
-    'cameraAuto',
-    'oneMouseButton',
-    'soundOn',
-    'blockChat',
-    'blockPrivateChat',
-    'blockTrade',
-    'blockDuel'
-];
 
 async function throttleAttempt(queryHandler, ip) {
     let { attempts, lastDate } = queryHandler.getLoginAttempts(ip);
@@ -257,14 +249,7 @@ async function playerUpdate(player) {
     const queryHandler = this.server.queryHandler;
     const message = { token: player.token };
 
-    delete player.token;
-    delete player.handler;
-
-    for (const property of PLAYER_BOOLEAN_PROPERTIES) {
-        player[property] = +player[property];
-    }
-
-    queryHandler.updatePlayer(player);
+    savePlayer(queryHandler, player);
 
     message.success = true;
     this.socket.sendMessage(message);
