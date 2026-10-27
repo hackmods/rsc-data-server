@@ -3,6 +3,8 @@
 
 const COINS_ID = 10;
 const SLOTS = 8;
+// house listings (store.house) hold slot HOUSE_SLOT_BASE + itemId
+const HOUSE_SLOT_BASE = 1000;
 const MAX_INT = 2147483647;
 
 const HOUR_MS = 1000 * 60 * 60;
@@ -146,6 +148,7 @@ module.exports = {
     GUIDE_FALLBACK_FILLS,
     GUIDE_WINDOW_MS,
     HOUR_MS,
+    HOUSE_SLOT_BASE,
     LIMIT_WINDOW_MS,
     MAX_INT,
     SLOTS,

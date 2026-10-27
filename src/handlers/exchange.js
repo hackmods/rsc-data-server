@@ -63,6 +63,10 @@ async function exchangeStake(message) {
     reply(this, message, 'stake');
 }
 
+async function exchangeHouse(message) {
+    reply(this, message, 'house');
+}
+
 async function exchangeLog(message) {
     reply(this, message, 'log');
 }
@@ -79,5 +83,6 @@ module.exports = {
     exchangeHistory,
     exchangeLedger,
     exchangeStake,
+    exchangeHouse,
     exchangeLog
 };

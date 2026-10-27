@@ -5,6 +5,8 @@
 //
 // The contract is docs/GRAND_EXCHANGE.md in hackmods/Autonomous-RSC.
 
+const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const log = require('bole')('exchange');
 const rules = require('./rules');
 const { matchOffer } = require('./match');
@@ -37,6 +39,9 @@ const EXCHANGE_STATEMENTS = {
         'UPDATE `exchange_offers` SET `filled` = :filled, `coins_moved` = ' +
         ':coins_moved, `state` = :state, `updated` = :updated WHERE ' +
         '`id` = :id',
+    exUpdateOfferTerms:
+        'UPDATE `exchange_offers` SET `qty` = ?, `price` = ?, `updated` = ? ' +
+        'WHERE `id` = ?',
     exRestingBook:
         "SELECT * FROM `exchange_offers` WHERE `item_id` = ? AND " +
         "`side` = ? AND `state` = 'open' AND `player_id` != ?",
@@ -365,122 +370,142 @@ class ExchangeStore {
                 this.statements.exGetOffer.get(lastInsertRowid)
             );
 
-            const book = this.statements.exRestingBook
-                .all(itemId, side === 'buy' ? 'sell' : 'buy', playerId)
-                .map(toOffer);
-
-            const restingById = new Map(book.map((row) => [row.id, row]));
-            const matched = matchOffer(book, incoming);
-
-            const fills = [];
-            const notify = [];
-
-            for (const { restingId, qty: fillQty, price: fillPrice } of
-                matched.fills) {
-                const resting = restingById.get(restingId);
-                const buy = side === 'buy' ? incoming : resting;
-                const sell = side === 'buy' ? resting : incoming;
-
-                const gross = fillQty * fillPrice;
-                const tax = rules.fillTax(fillQty, fillPrice);
-                const refund = fillQty * (buy.price - fillPrice);
-
-                const fill = this.statements.exInsertFill.run(
-                    buy.id,
-                    sell.id,
-                    itemId,
-                    fillQty,
-                    fillPrice,
-                    tax,
-                    now
-                );
-
-                fills.push({
-                    id: Number(fill.lastInsertRowid),
-                    buyId: buy.id,
-                    sellId: sell.id,
-                    itemId,
-                    qty: fillQty,
-                    price: fillPrice,
-                    tax,
-                    at: now
-                });
-
-                this.collect(buy.playerId, itemId, fillQty, 'bought', buy.id, now);
-                this.collect(buy.playerId, COINS_ID, refund, 'refund', buy.id, now);
-
-                this.collect(
-                    sell.playerId,
-                    COINS_ID,
-                    gross - tax,
-                    'sold',
-                    sell.id,
-                    now
-                );
-
-                if (refund > 0) {
-                    this.ledger(
-                        'refund',
-                        buy.playerId,
-                        COINS_ID,
-                        refund,
-                        `offer ${buy.id}`,
-                        now
-                    );
-                }
-
-                if (tax > 0) {
-                    this.ledger(
-                        'tax',
-                        sell.playerId,
-                        COINS_ID,
-                        tax,
-                        `fill ${fill.lastInsertRowid}`,
-                        now
-                    );
-                }
-
-                for (const touched of [resting, incoming]) {
-                    touched.filled += fillQty;
-                    touched.coinsMoved += gross;
-                    touched.state =
-                        touched.filled >= touched.qty ? 'done' : 'open';
-                    touched.updated = now;
-                }
-
-                this.statements.exUpdateOffer.run({
-                    id: resting.id,
-                    filled: resting.filled,
-                    coins_moved: resting.coinsMoved,
-                    state: resting.state,
-                    updated: now
-                });
-
-                notify.push({
-                    playerId: resting.playerId,
-                    offerId: resting.id,
-                    slot: resting.slot,
-                    side: resting.side,
-                    itemId,
-                    qty: resting.qty,
-                    filled: resting.filled,
-                    price: fillPrice,
-                    state: resting.state
-                });
-            }
-
-            if (fills.length) {
-                this.statements.exUpdateOffer.run({
-                    id: incoming.id,
-                    filled: incoming.filled,
-                    coins_moved: incoming.coinsMoved,
-                    state: incoming.state,
-                    updated: now
-                });
-            }
+            const { fills, notify } = this.settle(incoming, now);
 
             return { success: true, offer: incoming, fills, notify };
         });
+    }
+
+    // match an open offer (already in the table) against the resting book
+    // and settle every fill: collection rows, tax, ledger, offer rows.
+    // returns { fills, notify }
+    settle(incoming, now) {
+        const book = this.statements.exRestingBook
+            .all(
+                incoming.itemId,
+                incoming.side === 'buy' ? 'sell' : 'buy',
+                incoming.playerId
+            )
+            .map(toOffer);
+
+        const restingById = new Map(book.map((row) => [row.id, row]));
+        const matched = matchOffer(book, incoming);
+
+        const fills = [];
+        const notify = [];
+
+        for (const { restingId, qty: fillQty, price: fillPrice } of
+            matched.fills) {
+            const resting = restingById.get(restingId);
+            const buy = incoming.side === 'buy' ? incoming : resting;
+            const sell = incoming.side === 'buy' ? resting : incoming;
+
+            const gross = fillQty * fillPrice;
+            const tax = rules.fillTax(fillQty, fillPrice);
+            const refund = fillQty * (buy.price - fillPrice);
+
+            const fill = this.statements.exInsertFill.run(
+                buy.id,
+                sell.id,
+                incoming.itemId,
+                fillQty,
+                fillPrice,
+                tax,
+                now
+            );
+
+            fills.push({
+                id: Number(fill.lastInsertRowid),
+                buyId: buy.id,
+                sellId: sell.id,
+                itemId: incoming.itemId,
+                qty: fillQty,
+                price: fillPrice,
+                tax,
+                at: now
+            });
+
+            this.collect(
+                buy.playerId,
+                incoming.itemId,
+                fillQty,
+                'bought',
+                buy.id,
+                now
+            );
+            this.collect(buy.playerId, COINS_ID, refund, 'refund', buy.id, now);
+
+            this.collect(
+                sell.playerId,
+                COINS_ID,
+                gross - tax,
+                'sold',
+                sell.id,
+                now
+            );
+
+            if (refund > 0) {
+                this.ledger(
+                    'refund',
+                    buy.playerId,
+                    COINS_ID,
+                    refund,
+                    `offer ${buy.id}`,
+                    now
+                );
+            }
+
+            if (tax > 0) {
+                this.ledger(
+                    'tax',
+                    sell.playerId,
+                    COINS_ID,
+                    tax,
+                    `fill ${fill.lastInsertRowid}`,
+                    now
+                );
+            }
+
+            for (const touched of [resting, incoming]) {
+                touched.filled += fillQty;
+                touched.coinsMoved += gross;
+                touched.state =
+                    touched.filled >= touched.qty ? 'done' : 'open';
+                touched.updated = now;
+            }
+
+            this.statements.exUpdateOffer.run({
+                id: resting.id,
+                filled: resting.filled,
+                coins_moved: resting.coinsMoved,
+                state: resting.state,
+                updated: now
+            });
+
+            notify.push({
+                playerId: resting.playerId,
+                offerId: resting.id,
+                slot: resting.slot,
+                side: resting.side,
+                itemId: incoming.itemId,
+                qty: resting.qty,
+                filled: resting.filled,
+                price: fillPrice,
+                state: resting.state
+            });
+        }
+
+        if (fills.length) {
+            this.statements.exUpdateOffer.run({
+                id: incoming.id,
+                filled: incoming.filled,
+                coins_moved: incoming.coinsMoved,
+                state: incoming.state,
+                updated: now
+            });
+        }
+
+        return { fills, notify };
     }
 
     cancel({ opId, playerId, slot }) {
@@ -654,6 +679,122 @@ class ExchangeStore {
             this.ledger('stake', player.id, COINS_ID, coins, note, now);
 
             return { success: true };
+        });
+    }
+
+    // the house account (ARSC_EXCHANGE_HOUSE in the game server, Zezima by
+    // default): sell offers that top up to a standing quantity at a fixed
+    // price, so every shop good has a ceiling and runes and arrows a deep
+    // book. Each listing holds its own slot (HOUSE_SLOT_BASE + itemId, past
+    // the 8 player slots), skips the price band (it is the baseline) and is
+    // seeded from nothing: the units added are ledgered as kind 'seed'. The
+    // account is created on first use with a password nobody knows, so it
+    // cannot log in. listings: [{ itemId, qty, price }]
+    house({ opId, username, listings, note }) {
+        return this.write('house', opId, null, (now) => {
+            if (typeof username !== 'string' || !username.trim().length) {
+                refuse('NOT_FOUND');
+            }
+
+            if (!Array.isArray(listings)) {
+                refuse('NO_ITEM');
+            }
+
+            const name = normalizeUsername(username);
+            let player = this.statements.exGetPlayerByName.get(name);
+
+            if (!player) {
+                const secret = crypto.randomBytes(32).toString('hex');
+
+                this.queryHandler.insertPlayer({
+                    username: name,
+                    password: bcrypt.hashSync(secret, 4),
+                    ip: '127.0.0.1'
+                });
+
+                player = this.statements.exGetPlayerByName.get(name);
+            }
+
+            let seeded = 0;
+            const fills = [];
+            const notify = [];
+
+            for (const entry of listings) {
+                const itemId = Number(entry && entry.itemId);
+                const qty = Number(entry && entry.qty);
+                const price = Number(entry && entry.price);
+
+                if (!Number.isInteger(itemId) || itemId < 0) {
+                    refuse('NOT_FOUND');
+                }
+
+                if (itemId === COINS_ID) {
+                    refuse('UNTRADEABLE');
+                }
+
+                if (!rules.isPositiveInt(qty) || !rules.isPositiveInt(price)) {
+                    refuse('NO_ITEM');
+                }
+
+                const slot = rules.HOUSE_SLOT_BASE + itemId;
+                const row = this.statements.exOpenOfferBySlot.get(
+                    player.id,
+                    slot
+                );
+
+                let add = qty;
+                let id;
+
+                if (row) {
+                    add = Math.max(0, qty - (row.qty - row.filled));
+
+                    if (add > 0 || row.price !== price) {
+                        this.statements.exUpdateOfferTerms.run(
+                            row.qty + add,
+                            price,
+                            now,
+                            row.id
+                        );
+                    }
+
+                    id = row.id;
+                } else {
+                    id = Number(
+                        this.statements.exInsertOffer.run({
+                            player_id: player.id,
+                            username: player.username,
+                            slot,
+                            side: 'sell',
+                            item_id: itemId,
+                            qty,
+                            price,
+                            now
+                        }).lastInsertRowid
+                    );
+                }
+
+                if (add > 0) {
+                    seeded += add;
+                    this.ledger('seed', player.id, itemId, add, note, now);
+                }
+
+                const settled = this.settle(
+                    toOffer(this.statements.exGetOffer.get(id)),
+                    now
+                );
+
+                fills.push(...settled.fills);
+                notify.push(...settled.notify);
+            }
+
+            return {
+                success: true,
+                playerId: player.id,
+                listed: listings.length,
+                seeded,
+                fills,
+                notify
+            };
         });
     }
 

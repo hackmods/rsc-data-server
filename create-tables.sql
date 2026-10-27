@@ -160,7 +160,7 @@ CREATE TABLE IF NOT EXISTS `exchange_offers` (
     `id` integer not null primary key,
     `player_id` integer not null,
     `username` varchar(12),
-    `slot` integer not null, -- 0-7: the lowest slot no open offer of that player holds
+    `slot` integer not null, -- 0-7: the lowest slot no open offer of that player holds; house listings 1000 + item_id
     `side` text not null check (`side` in ('buy', 'sell')),
     `item_id` integer not null,
     `qty` integer not null,
@@ -203,7 +203,7 @@ CREATE TABLE IF NOT EXISTS `exchange_collect` (
     `player_id` integer not null,
     `item_id` integer not null,
     `amount` integer not null,
-    `reason` text, -- bought|sold|refund|cancel|stake
+    `reason` text, -- bought|sold|refund|cancel|stake|void
     `offer_id` integer,
     `created` integer not null,
     `claimed_at` integer
