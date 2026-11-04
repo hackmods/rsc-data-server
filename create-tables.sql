@@ -102,7 +102,9 @@ CREATE TABLE IF NOT EXISTS `players` (
     `mute_end_date` datetime default '0',
     `membership_end_date` datetime default '0',
     `quest_stages` json default '{}',
-    `cache` json default '{"sendAppearance": true}'
+    `cache` json default '{"sendAppearance": true}',
+    `iron_man` integer default '0',
+    `hc_ironman_death` integer default '0'
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS `players_username_unique` on `players`

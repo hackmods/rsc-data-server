@@ -38,6 +38,8 @@ const SET_PLAYER_ATTRIBUTES = [
     'quest_stages',
     'cache',
     'mute_end_date',
+    'iron_man',
+    'hc_ironman_death',
     ...skills.map((skill) => `exp_${skill}`),
     ...skills.map((skill) => `cur_${skill}`)
 ];
@@ -58,6 +60,15 @@ const PLAYER_JSON_FIELDS = [
     'bank',
     'questStages',
     'cache'
+];
+
+// players columns added after release: create-tables.sql has them for a new
+// database, and migrate() adds any an older database lacks (CREATE TABLE IF
+// NOT EXISTS never alters an existing table)
+const PLAYER_COLUMN_MIGRATIONS = [
+    // ARSC Iron Man mode (Open-RSC players.iron_man, 0-3, and hc_ironman_death)
+    ['iron_man', "integer default '0'"],
+    ['hc_ironman_death', "integer default '0'"]
 ];
 
 const TOTAL_EXP = `(\`exp_${skills.join('` + `exp_')}\`) AS \`experience\``;
@@ -262,6 +273,24 @@ class QueryHandler {
 
     createTables() {
         this.database.exec(CREATE_TABLES);
+        this.migrate();
+    }
+
+    migrate() {
+        const have = new Set(
+            this.database
+                .prepare('PRAGMA table_info(`players`)')
+                .all()
+                .map((column) => column.name)
+        );
+
+        for (const [name, type] of PLAYER_COLUMN_MIGRATIONS) {
+            if (!have.has(name)) {
+                this.database.exec(
+                    `ALTER TABLE \`players\` ADD COLUMN \`${name}\` ${type}`
+                );
+            }
+        }
     }
 
     resetLoggedInWorld(world) {
@@ -369,6 +398,10 @@ class QueryHandler {
     }
 
     updatePlayer(player) {
+        // an older game server's save has no Iron Man fields: keep them 0
+        player.ironMan = Number(player.ironMan) || 0;
+        player.hcIronmanDeath = Number(player.hcIronmanDeath) || 0;
+
         player.totalLevel = 0;
 
         for (const skill of skills) {
