@@ -14,7 +14,7 @@
   "license": "AGPL-3.0+",
   "dependencies": {
     "bcryptjs": "^2.4.3",
-    "better-sqlite3": "^7.1.1",
+    "better-sqlite3": "^12.11.1",
     "bole": "^4.0.0",
     "camelcase-keys": "^6.2.2",
     "json-socket": "^0.3.0",
