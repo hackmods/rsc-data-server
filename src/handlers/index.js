@@ -4,6 +4,7 @@ const handlers = [
     require('./hiscores'),
     require('./web-content'),
     require('./player'),
+    require('./pvp'), // ARSC Wilderness clans and PvP record
     require('./world')
 ];
 

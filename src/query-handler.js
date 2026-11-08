@@ -5,6 +5,7 @@ const snakeCaseKeys = require('snakecase-keys');
 const stripHTML = require('string-strip-html');
 const { experienceToLevel } = require('./skills');
 const { EXCHANGE_STATEMENTS, ExchangeStore } = require('./exchange/store');
+const { PVP_STATEMENTS, PvpStore } = require('./pvp/store');
 
 const CREATE_TABLES = fs
     .readFileSync(`${__dirname}/../create-tables.sql`)
@@ -196,7 +197,8 @@ class QueryHandler {
                 '(`to_player`, `from`, `subject`, `message`) ' +
                 'SELECT `id`, :from, :subject, :message ' +
                 'FROM `players` WHERE `username` = :username',
-            ...EXCHANGE_STATEMENTS
+            ...EXCHANGE_STATEMENTS,
+            ...PVP_STATEMENTS
         };
 
         for (const [name, statement] of Object.entries(this.statements)) {
@@ -205,6 +207,9 @@ class QueryHandler {
 
         // Grand Exchange order book (src/exchange/store.js)
         this.exchange = new ExchangeStore(this);
+
+        // ARSC Wilderness clans and the PvP record (src/pvp/store.js)
+        this.pvp = new PvpStore(this);
 
         this.updateTotalHiscoreRanks = this.database.transaction(() => {
             this.statements.dropRankTable.run();

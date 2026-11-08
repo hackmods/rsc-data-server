@@ -248,3 +248,57 @@ CREATE TABLE IF NOT EXISTS `economy_ledger` (
 );
 
 CREATE INDEX IF NOT EXISTS `economy_ledger_at` ON `economy_ledger` (`at`);
+
+-- Wilderness clans and the PvP record (ARSC): docs/WILDERNESS.md in Autonomous-RSC.
+-- Per-player PvP counters live in players.cache under "pvp" (kills, deaths, assists, streak, bestStreak, damage,
+-- deepest, loot); these tables hold the kill log, the clans and their battles. Times are epoch milliseconds.
+
+CREATE TABLE IF NOT EXISTS `pvp_events` (
+    `id` integer not null primary key,
+    `at` integer not null,
+    `killer_id` integer,
+    `killer` varchar(12),
+    `victim_id` integer,
+    `victim` varchar(12),
+    `killer_clan` text,
+    `victim_clan` text,
+    `wild_level` integer default 0,
+    `x` integer,
+    `y` integer,
+    `style` text, -- melee|ranged|magic: the killer's largest share of the damage
+    `assists` text, -- JSON [username, ...]: other players who damaged the victim
+    `loot_value` integer default 0,
+    `victim_skulled` integer default 0,
+    `battle_id` integer
+);
+
+CREATE INDEX IF NOT EXISTS `pvp_events_at` ON `pvp_events` (`at`);
+
+CREATE TABLE IF NOT EXISTS `clans` (
+    `tag` text not null primary key, -- 2-4 letters, upper case
+    `name` text not null,
+    `leader` varchar(12),
+    `motto` text,
+    `colour` text,
+    `created` integer not null,
+    `battles_won` integer not null default 0,
+    `battles_lost` integer not null default 0,
+    `members` text not null default '[]' -- JSON [{ username, rank: leader|general|member, joined }]
+);
+
+CREATE TABLE IF NOT EXISTS `clan_battles` (
+    `id` integer not null primary key,
+    `challenger` text not null,
+    `defender` text not null,
+    `front` text,
+    `created` integer not null,
+    `starts_at` integer,
+    `ends_at` integer,
+    `status` text not null default 'challenged'
+        check (`status` in ('challenged', 'scheduled', 'live', 'done', 'expired', 'cancelled')),
+    `kills_challenger` integer not null default 0,
+    `kills_defender` integer not null default 0,
+    `winner` text
+);
+
+CREATE INDEX IF NOT EXISTS `clan_battles_status` ON `clan_battles` (`status`, `created`);
