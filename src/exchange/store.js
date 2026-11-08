@@ -94,6 +94,10 @@ const EXCHANGE_STATEMENTS = {
         'SELECT `price`, SUM(`qty` - `filled`) AS `qty` FROM ' +
         "`exchange_offers` WHERE `item_id` = ? AND `side` = 'sell' AND " +
         "`state` = 'open' GROUP BY `price` ORDER BY `price` ASC LIMIT ?",
+    // has this house slot ever held an offer (its opening stock comes at once)
+    exSlotEverUsed:
+        'SELECT 1 AS `used` FROM `exchange_offers` WHERE `player_id` = ? AND ' +
+        '`slot` = ? LIMIT 1',
     // the cheapest open sell offer of anyone but the house (its yield rule)
     exBestAskExcept:
         'SELECT MIN(`price`) AS `price` FROM `exchange_offers` WHERE ' +
@@ -733,7 +737,10 @@ class ExchangeStore {
     // listings: [{ itemId, qty, price, step?, yieldAt? }]
     //   qty      the target open quantity
     //   step     most units added or withdrawn this pass (absent: straight to
-    //            qty, never withdrawn: the hourly top-up of before)
+    //            qty, never withdrawn: the hourly top-up of before). A slot
+    //            that never held an offer opens at qty at once (a new world
+    //            or a new good has stock from the first pass); a good bought
+    //            out refills a step a pass
     //   yieldAt  add nothing while anyone else asks at or under this price (a
     //            player selling the item is never undercut by new house stock)
     // The reply carries each listing's outcome: { itemId, open, added,
@@ -810,8 +817,14 @@ class ExchangeStore {
                 let add = 0;
                 let remove = 0;
 
+                const opening =
+                    !row && !this.statements.exSlotEverUsed.get(player.id, slot);
+
                 if (open < qty && !yielded) {
-                    add = step === null ? qty - open : Math.min(step, qty - open);
+                    add =
+                        step === null || opening
+                            ? qty - open
+                            : Math.min(step, qty - open);
                 } else if (open > qty && step !== null) {
                     remove = Math.min(step, open - qty);
                 }

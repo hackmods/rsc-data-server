@@ -188,30 +188,34 @@ test('house: bad listings are refused and change nothing', async () => {
 
 // docs/PLAN_GE_SCALING.md: the house moves toward a target by `step` a pass, withdraws above it (ledger 'unseed') and adds
 // nothing while someone else asks at or under `yieldAt`.
-test('house: step moves the open quantity toward the target, both ways, and ledgers seed and unseed', async () => {
+test('house: a new good opens at its target; a bought-out good refills a step a pass; above the target it withdraws', async () => {
     const ex = makeExchange();
     const ledger = (kind) =>
         ex.queryHandler.database.prepare('SELECT SUM(amount) AS n FROM economy_ledger WHERE kind = ?').get(kind).n;
+    const pass = (n, qty = 100) => ex.call('exchangeHouse', { opId: `s${n}`, username: 'Zezima', listings: [{ itemId: FIRE, qty, price: 6, step: 10 }] });
 
-    const first = await ex.call('exchangeHouse', { opId: 's1', username: 'Zezima', listings: [{ itemId: FIRE, qty: 100, price: 6, step: 10 }] });
-    assert.deepStrictEqual(first.results, [{ itemId: FIRE, open: 10, added: 10, removed: 0, yielded: false }]);
+    const first = await pass(1);
+    assert.deepStrictEqual(first.results, [{ itemId: FIRE, open: 100, added: 100, removed: 0, yielded: false }], 'opening stock at once');
 
-    let last = first;
-    for (let pass = 2; pass <= 12; pass += 1) {
-        last = await ex.call('exchangeHouse', { opId: `s${pass}`, username: 'Zezima', listings: [{ itemId: FIRE, qty: 100, price: 6, step: 10 }] });
-    }
-    assert.strictEqual(last.results[0].open, 100, 'ten passes fill it, then it holds');
-    assert.strictEqual(last.results[0].added, 0);
-    assert.strictEqual(ledger('seed'), 100);
+    // a buyer takes all of it: the slot has history now, so it refills 10 a pass, not 100 at once
+    const buyer = ex.addPlayer('buyer', [{ id: COINS, amount: 10000 }]);
+    await ex.call('exchangePlace', {
+        opId: 'b1',
+        save: { ...buyer, inventory: [{ id: COINS, amount: 10000 - 600 }] },
+        offer: { playerId: buyer.id, username: 'buyer', side: 'buy', itemId: FIRE, qty: 100, price: 6, basePrice: 4, stackable: true }
+    });
+    const refill = await pass(2);
+    assert.deepStrictEqual(refill.results[0], { itemId: FIRE, open: 10, added: 10, removed: 0, yielded: false });
+    let last = refill;
+    for (let n = 3; n <= 12; n += 1) last = await pass(n);
+    assert.strictEqual(last.results[0].open, 100, 'ten passes refill it, then it holds');
+    assert.strictEqual(ledger('seed'), 200);
 
     // humans arrived: the target fell to 50; a pass withdraws one step of unsold units
-    const down = await ex.call('exchangeHouse', { opId: 's13', username: 'Zezima', listings: [{ itemId: FIRE, qty: 50, price: 6, step: 10 }] });
+    const down = await pass(13, 50);
     assert.deepStrictEqual(down.results[0], { itemId: FIRE, open: 90, added: 0, removed: 10, yielded: false });
     assert.strictEqual(down.unseeded, 10);
     assert.strictEqual(ledger('unseed'), -10);
-    const state = await ex.call('exchangeState', { username: 'Zezima' });
-    const fire = state.offers.find((o) => o.itemId === FIRE);
-    assert.strictEqual(fire.qty - fire.filled, 90);
 });
 
 test('house: a player asking at or under yieldAt stops new house stock; existing units stay listed', async () => {
@@ -225,11 +229,12 @@ test('house: a player asking at or under yieldAt stops new house stock; existing
         offer: { playerId: seller.id, username: 'seller', side: 'sell', itemId: FIRE, qty: 50, price: 11, basePrice: 4, stackable: true }
     });
 
-    const held = await ex.call('exchangeHouse', { opId: 'y2', username: 'Zezima', listings: [{ itemId: FIRE, qty: 100, price: 6, step: 10, yieldAt: 12 }] });
-    assert.deepStrictEqual(held.results[0], { itemId: FIRE, open: 10, added: 0, removed: 0, yielded: true });
+    // the target rises (people left), but a player sells under 2x the house price: nothing is added
+    const held = await ex.call('exchangeHouse', { opId: 'y2', username: 'Zezima', listings: [{ itemId: FIRE, qty: 200, price: 6, step: 10, yieldAt: 12 }] });
+    assert.deepStrictEqual(held.results[0], { itemId: FIRE, open: 100, added: 0, removed: 0, yielded: true });
 
     // a gouge (over twice the house price) does not hold the house back
-    const gouge = await ex.call('exchangeHouse', { opId: 'y3', username: 'Zezima', listings: [{ itemId: FIRE, qty: 100, price: 6, step: 10, yieldAt: 10 }] });
+    const gouge = await ex.call('exchangeHouse', { opId: 'y3', username: 'Zezima', listings: [{ itemId: FIRE, qty: 200, price: 6, step: 10, yieldAt: 10 }] });
     assert.strictEqual(gouge.results[0].added, 10);
     assert.strictEqual(gouge.results[0].yielded, false);
 });
