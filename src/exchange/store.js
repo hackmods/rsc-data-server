@@ -94,6 +94,11 @@ const EXCHANGE_STATEMENTS = {
         'SELECT `price`, SUM(`qty` - `filled`) AS `qty` FROM ' +
         "`exchange_offers` WHERE `item_id` = ? AND `side` = 'sell' AND " +
         "`state` = 'open' GROUP BY `price` ORDER BY `price` ASC LIMIT ?",
+    // the cheapest open sell offer of anyone but the house (its yield rule)
+    exBestAskExcept:
+        'SELECT MIN(`price`) AS `price` FROM `exchange_offers` WHERE ' +
+        "`item_id` = ? AND `side` = 'sell' AND `state` = 'open' AND " +
+        '`player_id` != ?',
     exPricedItems:
         "SELECT `item_id` FROM `exchange_offers` WHERE `state` = 'open' " +
         'UNION SELECT `item_id` FROM `exchange_fills` ORDER BY `item_id`'
@@ -683,13 +688,21 @@ class ExchangeStore {
     }
 
     // the house account (ARSC_EXCHANGE_HOUSE in the game server, Zezima by
-    // default): sell offers that top up to a standing quantity at a fixed
-    // price, so every shop good has a ceiling and runes and arrows a deep
-    // book. Each listing holds its own slot (HOUSE_SLOT_BASE + itemId, past
-    // the 8 player slots), skips the price band (it is the baseline) and is
-    // seeded from nothing: the units added are ledgered as kind 'seed'. The
-    // account is created on first use with a password nobody knows, so it
-    // cannot log in. listings: [{ itemId, qty, price }]
+    // default): sell offers that move toward a standing quantity at a fixed
+    // price, so every supplies good has a ceiling and a buyer on an empty
+    // world a seller. Each listing holds its own slot (HOUSE_SLOT_BASE +
+    // itemId, past the 8 player slots), skips the price band (it is the
+    // baseline) and is seeded from nothing: units added are ledgered as kind
+    // 'seed', unsold units withdrawn as 'unseed'. The account is created on
+    // first use with a password nobody knows, so it cannot log in.
+    // listings: [{ itemId, qty, price, step?, yieldAt? }]
+    //   qty      the target open quantity
+    //   step     most units added or withdrawn this pass (absent: straight to
+    //            qty, never withdrawn: the hourly top-up of before)
+    //   yieldAt  add nothing while anyone else asks at or under this price (a
+    //            player selling the item is never undercut by new house stock)
+    // The reply carries each listing's outcome: { itemId, open, added,
+    // removed, yielded }.
     house({ opId, username, listings, note }) {
         return this.write('house', opId, null, (now) => {
             if (typeof username !== 'string' || !username.trim().length) {
@@ -716,13 +729,19 @@ class ExchangeStore {
             }
 
             let seeded = 0;
+            let unseeded = 0;
             const fills = [];
             const notify = [];
+            const results = [];
 
             for (const entry of listings) {
                 const itemId = Number(entry && entry.itemId);
                 const qty = Number(entry && entry.qty);
                 const price = Number(entry && entry.price);
+                const step =
+                    entry && entry.step != null ? Number(entry.step) : null;
+                const yieldAt =
+                    entry && entry.yieldAt != null ? Number(entry.yieldAt) : null;
 
                 if (!Number.isInteger(itemId) || itemId < 0) {
                     refuse('NOT_FOUND');
@@ -736,29 +755,44 @@ class ExchangeStore {
                     refuse('NO_ITEM');
                 }
 
+                if (step !== null && !rules.isPositiveInt(step)) {
+                    refuse('NO_ITEM');
+                }
+
                 const slot = rules.HOUSE_SLOT_BASE + itemId;
                 const row = this.statements.exOpenOfferBySlot.get(
                     player.id,
                     slot
                 );
+                const open = row ? row.qty - row.filled : 0;
+                const other =
+                    yieldAt === null
+                        ? null
+                        : this.statements.exBestAskExcept.get(itemId, player.id)
+                              .price;
+                const yielded = other != null && other <= yieldAt;
 
-                let add = qty;
-                let id;
+                let add = 0;
+                let remove = 0;
+
+                if (open < qty && !yielded) {
+                    add = step === null ? qty - open : Math.min(step, qty - open);
+                } else if (open > qty && step !== null) {
+                    remove = Math.min(step, open - qty);
+                }
+
+                let id = row ? row.id : null;
 
                 if (row) {
-                    add = Math.max(0, qty - (row.qty - row.filled));
-
-                    if (add > 0 || row.price !== price) {
+                    if (add > 0 || remove > 0 || row.price !== price) {
                         this.statements.exUpdateOfferTerms.run(
-                            row.qty + add,
+                            row.qty + add - remove,
                             price,
                             now,
                             row.id
                         );
                     }
-
-                    id = row.id;
-                } else {
+                } else if (add > 0) {
                     id = Number(
                         this.statements.exInsertOffer.run({
                             player_id: player.id,
@@ -766,7 +800,7 @@ class ExchangeStore {
                             slot,
                             side: 'sell',
                             item_id: itemId,
-                            qty,
+                            qty: add,
                             price,
                             now
                         }).lastInsertRowid
@@ -776,6 +810,23 @@ class ExchangeStore {
                 if (add > 0) {
                     seeded += add;
                     this.ledger('seed', player.id, itemId, add, note, now);
+                }
+
+                if (remove > 0) {
+                    unseeded += remove;
+                    this.ledger('unseed', player.id, itemId, -remove, note, now);
+                }
+
+                results.push({
+                    itemId,
+                    open: open + add - remove,
+                    added: add,
+                    removed: remove,
+                    yielded
+                });
+
+                if (id === null) {
+                    continue;
                 }
 
                 const settled = this.settle(
@@ -792,6 +843,8 @@ class ExchangeStore {
                 playerId: player.id,
                 listed: listings.length,
                 seeded,
+                unseeded,
+                results,
                 fills,
                 notify
             };

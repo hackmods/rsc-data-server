@@ -185,3 +185,65 @@ test('house: bad listings are refused and change nothing', async () => {
     const state = await ex.call('exchangeState', { username: 'Zezima' });
     assert.strictEqual(state.success, false, 'not even the account was made');
 });
+
+// docs/PLAN_GE_SCALING.md: the house moves toward a target by `step` a pass, withdraws above it (ledger 'unseed') and adds
+// nothing while someone else asks at or under `yieldAt`.
+test('house: step moves the open quantity toward the target, both ways, and ledgers seed and unseed', async () => {
+    const ex = makeExchange();
+    const ledger = (kind) =>
+        ex.queryHandler.database.prepare('SELECT SUM(amount) AS n FROM economy_ledger WHERE kind = ?').get(kind).n;
+
+    const first = await ex.call('exchangeHouse', { opId: 's1', username: 'Zezima', listings: [{ itemId: FIRE, qty: 100, price: 6, step: 10 }] });
+    assert.deepStrictEqual(first.results, [{ itemId: FIRE, open: 10, added: 10, removed: 0, yielded: false }]);
+
+    let last = first;
+    for (let pass = 2; pass <= 12; pass += 1) {
+        last = await ex.call('exchangeHouse', { opId: `s${pass}`, username: 'Zezima', listings: [{ itemId: FIRE, qty: 100, price: 6, step: 10 }] });
+    }
+    assert.strictEqual(last.results[0].open, 100, 'ten passes fill it, then it holds');
+    assert.strictEqual(last.results[0].added, 0);
+    assert.strictEqual(ledger('seed'), 100);
+
+    // humans arrived: the target fell to 50; a pass withdraws one step of unsold units
+    const down = await ex.call('exchangeHouse', { opId: 's13', username: 'Zezima', listings: [{ itemId: FIRE, qty: 50, price: 6, step: 10 }] });
+    assert.deepStrictEqual(down.results[0], { itemId: FIRE, open: 90, added: 0, removed: 10, yielded: false });
+    assert.strictEqual(down.unseeded, 10);
+    assert.strictEqual(ledger('unseed'), -10);
+    const state = await ex.call('exchangeState', { username: 'Zezima' });
+    const fire = state.offers.find((o) => o.itemId === FIRE);
+    assert.strictEqual(fire.qty - fire.filled, 90);
+});
+
+test('house: a player asking at or under yieldAt stops new house stock; existing units stay listed', async () => {
+    const ex = makeExchange();
+    const seller = ex.addPlayer('seller', [{ id: FIRE, amount: 50 }]);
+
+    await ex.call('exchangeHouse', { opId: 'y1', username: 'Zezima', listings: [{ itemId: FIRE, qty: 100, price: 6, step: 10, yieldAt: 12 }] });
+    await ex.call('exchangePlace', {
+        opId: 'p1',
+        save: { ...seller, inventory: [] },
+        offer: { playerId: seller.id, username: 'seller', side: 'sell', itemId: FIRE, qty: 50, price: 11, basePrice: 4, stackable: true }
+    });
+
+    const held = await ex.call('exchangeHouse', { opId: 'y2', username: 'Zezima', listings: [{ itemId: FIRE, qty: 100, price: 6, step: 10, yieldAt: 12 }] });
+    assert.deepStrictEqual(held.results[0], { itemId: FIRE, open: 10, added: 0, removed: 0, yielded: true });
+
+    // a gouge (over twice the house price) does not hold the house back
+    const gouge = await ex.call('exchangeHouse', { opId: 'y3', username: 'Zezima', listings: [{ itemId: FIRE, qty: 100, price: 6, step: 10, yieldAt: 10 }] });
+    assert.strictEqual(gouge.results[0].added, 10);
+    assert.strictEqual(gouge.results[0].yielded, false);
+});
+
+test('house: a yielding listing that never existed is not created', async () => {
+    const ex = makeExchange();
+    const seller = ex.addPlayer('seller', [{ id: ARROWS, amount: 50 }]);
+    await ex.call('exchangePlace', {
+        opId: 'p1',
+        save: { ...seller, inventory: [] },
+        offer: { playerId: seller.id, username: 'seller', side: 'sell', itemId: ARROWS, qty: 50, price: 2, basePrice: 1, stackable: true }
+    });
+    const reply = await ex.call('exchangeHouse', { opId: 'n1', username: 'Zezima', listings: [{ itemId: ARROWS, qty: 1000, price: 2, step: 100, yieldAt: 4 }] });
+    assert.deepStrictEqual(reply.results[0], { itemId: ARROWS, open: 0, added: 0, removed: 0, yielded: true });
+    const state = await ex.call('exchangeState', { username: 'Zezima' });
+    assert.strictEqual(state.offers.length, 0);
+});

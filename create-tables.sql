@@ -240,7 +240,7 @@ CREATE TABLE IF NOT EXISTS `exchange_ops` (
 CREATE TABLE IF NOT EXISTS `economy_ledger` (
     `id` integer not null primary key,
     `at` integer not null,
-    `kind` text not null, -- tax|stake|refund|taint_trade
+    `kind` text not null, -- tax|stake|refund|taint_trade|seed|unseed (house stock in and out, item rows)
     `player_id` integer,
     `item_id` integer,
     `amount` integer,
