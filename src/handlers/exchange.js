@@ -67,6 +67,22 @@ async function exchangeHouse(message) {
     reply(this, message, 'house');
 }
 
+async function exchangeTape(message) {
+    reply(this, message, 'tape');
+}
+
+async function exchangeCandles(message) {
+    reply(this, message, 'candles');
+}
+
+async function exchangeMovers(message) {
+    reply(this, message, 'movers');
+}
+
+async function exchangeIndexRows(message) {
+    reply(this, message, 'indexRows');
+}
+
 async function exchangeLog(message) {
     reply(this, message, 'log');
 }
@@ -84,5 +100,9 @@ module.exports = {
     exchangeLedger,
     exchangeStake,
     exchangeHouse,
-    exchangeLog
+    exchangeLog,
+    exchangeTape,
+    exchangeCandles,
+    exchangeMovers,
+    exchangeIndexRows
 };

@@ -101,7 +101,26 @@ const EXCHANGE_STATEMENTS = {
         '`player_id` != ?',
     exPricedItems:
         "SELECT `item_id` FROM `exchange_offers` WHERE `state` = 'open' " +
-        'UNION SELECT `item_id` FROM `exchange_fills` ORDER BY `item_id`'
+        'UNION SELECT `item_id` FROM `exchange_fills` ORDER BY `item_id`',
+    // market data (read-only). sell_player is the seller's player id; sell_slot
+    // >= HOUSE_SLOT_BASE marks a house listing
+    exTape:
+        'SELECT f.`id`, f.`item_id`, f.`qty`, f.`price`, f.`at`, ' +
+        's.`slot` AS sell_slot, s.`player_id` AS sell_player, ' +
+        's.`username` AS seller, b.`username` AS buyer FROM ' +
+        '`exchange_fills` f LEFT JOIN `exchange_offers` s ON s.`id` = ' +
+        'f.`sell_id` LEFT JOIN `exchange_offers` b ON b.`id` = f.`buy_id` ' +
+        'WHERE f.`at` >= ? ORDER BY f.`at` DESC, f.`id` DESC LIMIT ?',
+    exFillsAll:
+        'SELECT f.`item_id`, f.`qty`, f.`price`, f.`at`, ' +
+        's.`slot` AS sell_slot, s.`player_id` AS sell_player FROM ' +
+        '`exchange_fills` f LEFT JOIN `exchange_offers` s ON s.`id` = ' +
+        'f.`sell_id` WHERE f.`at` >= ? ORDER BY f.`at`, f.`id`',
+    exIndexRows:
+        'SELECT (`at` / CAST(:bucket AS INTEGER)) * CAST(:bucket AS INTEGER) AS t, `item_id`, ' +
+        'SUM(`qty`) AS qty, SUM(`qty` * `price`) AS notional FROM ' +
+        '`exchange_fills` WHERE `at` >= :since GROUP BY t, `item_id` ' +
+        'ORDER BY t, `item_id`'
 };
 
 class Refusal extends Error {
@@ -113,6 +132,22 @@ class Refusal extends Error {
 
 function refuse(code) {
     throw new Refusal(code);
+}
+
+function clampHours(hours, fallback, max) {
+    hours = Number(hours);
+
+    return hours > 0 ? Math.min(max, hours) : fallback;
+}
+
+function clampBucket(bucketMs) {
+    bucketMs = Math.floor(Number(bucketMs));
+
+    if (!(bucketMs > 0)) {
+        return rules.HOUR_MS;
+    }
+
+    return Math.max(60000, Math.min(7 * 24 * rules.HOUR_MS, bucketMs));
 }
 
 function toOffer(row) {
@@ -1033,6 +1068,137 @@ class ExchangeStore {
             success: true,
             fills: this.statements.exRecentFills.all(Number(itemId), since)
         };
+    }
+
+    // newest fills first; house: the seller was a house listing
+    // accounts: the buyer and seller names too, for the fleet's market watch
+    // (lib/market-wire.js); the fleet never passes it on to the public
+    tape({ since = 0, limit = 50, accounts = false } = {}) {
+        limit = Math.max(1, Math.min(200, Math.floor(Number(limit)) || 50));
+
+        const fills = this.statements.exTape
+            .all(Math.max(0, Number(since) || 0), limit)
+            .map((row) => ({
+                id: row.id,
+                itemId: row.item_id,
+                qty: row.qty,
+                price: row.price,
+                at: row.at,
+                house: row.sell_slot >= rules.HOUSE_SLOT_BASE,
+                ...(accounts ? { buyer: row.buyer, seller: row.seller } : {})
+            }));
+
+        return { success: true, fills };
+    }
+
+    // OHLC per bucket (aligned to the epoch), oldest first, empty buckets left out
+    candles({ itemId, bucketMs = rules.HOUR_MS, hours = 24 }) {
+        itemId = Number(itemId);
+        bucketMs = clampBucket(bucketMs);
+        hours = clampHours(hours, 24, 720);
+
+        const since = this.now() - hours * rules.HOUR_MS;
+        const byBucket = new Map();
+
+        for (const f of this.statements.exFillsAll.all(since)) {
+            if (f.item_id !== itemId) {
+                continue;
+            }
+
+            const t = Math.floor(f.at / bucketMs) * bucketMs;
+            let c = byBucket.get(t);
+
+            if (!c) {
+                c = {
+                    t,
+                    open: f.price,
+                    high: f.price,
+                    low: f.price,
+                    close: f.price,
+                    volume: 0,
+                    trades: 0
+                };
+                byBucket.set(t, c);
+            }
+
+            c.high = Math.max(c.high, f.price);
+            c.low = Math.min(c.low, f.price);
+            c.close = f.price;
+            c.volume += f.qty;
+            c.trades += 1;
+        }
+
+        return {
+            success: true,
+            bucketMs,
+            candles: [...byBucket.values()].sort((a, b) => a.t - b.t)
+        };
+    }
+
+    // per traded item over the window: first and last price, volume, and the
+    // share of the quantity the house sold (houseId also counts, optional)
+    movers({ hours = 24, houseId } = {}) {
+        hours = clampHours(hours, 24, 168);
+
+        const since = this.now() - hours * rules.HOUR_MS;
+        const byItem = new Map();
+
+        for (const f of this.statements.exFillsAll.all(since)) {
+            let m = byItem.get(f.item_id);
+
+            if (!m) {
+                m = {
+                    itemId: f.item_id,
+                    open: f.price,
+                    last: f.price,
+                    volume: 0,
+                    trades: 0,
+                    houseQty: 0
+                };
+                byItem.set(f.item_id, m);
+            }
+
+            m.last = f.price;
+            m.volume += f.qty;
+            m.trades += 1;
+
+            if (
+                f.sell_slot >= rules.HOUSE_SLOT_BASE ||
+                (houseId !== undefined && f.sell_player === Number(houseId))
+            ) {
+                m.houseQty += f.qty;
+            }
+        }
+
+        const items = [...byItem.values()].map((m) => ({
+            itemId: m.itemId,
+            open: m.open,
+            last: m.last,
+            change: m.open ? (m.last - m.open) / m.open : 0,
+            volume: m.volume,
+            trades: m.trades,
+            houseShare: m.volume ? m.houseQty / m.volume : 0
+        }));
+
+        return { success: true, hours, items };
+    }
+
+    // per bucket and item: traded quantity and coins (qty * price); the game
+    // server turns these into the tier indexes using base values
+    indexRows({ hours = 168, bucketMs = rules.HOUR_MS } = {}) {
+        hours = clampHours(hours, 168, 720);
+        bucketMs = clampBucket(bucketMs);
+
+        const rows = this.statements.exIndexRows
+            .all({ bucket: bucketMs, since: this.now() - hours * rules.HOUR_MS })
+            .map((r) => ({
+                t: r.t,
+                itemId: r.item_id,
+                qty: r.qty,
+                notional: r.notional
+            }));
+
+        return { success: true, bucketMs, rows };
     }
 
     ledgerTotals({ since = 0 }) {
